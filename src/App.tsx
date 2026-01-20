@@ -583,6 +583,22 @@ const BudgetView = ({
               <button className="ghost" onClick={() => removeItem("income", item.id)}>Remove</button>
             </div>
           ))}
+          <div className="saved-list">
+            <h4>Saved income</h4>
+            {data.income.length === 0 && <p className="muted">No income entries saved yet.</p>}
+            {data.income.map((item) => (
+              <div key={`income-${item.id}`} className="saved-item">
+                <div>
+                  <strong>{item.name || "Untitled"}</strong>
+                  <span className="muted">{item.category}</span>
+                </div>
+                <div className="saved-meta">
+                  <span>{item.frequency}</span>
+                  <strong>{formatMoney(item.amount)}</strong>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="card">
@@ -619,6 +635,22 @@ const BudgetView = ({
               <button className="ghost" onClick={() => removeItem("expenses", item.id)}>Remove</button>
             </div>
           ))}
+          <div className="saved-list">
+            <h4>Saved expenses</h4>
+            {data.expenses.length === 0 && <p className="muted">No expense entries saved yet.</p>}
+            {data.expenses.map((item) => (
+              <div key={`expense-${item.id}`} className="saved-item">
+                <div>
+                  <strong>{item.name || "Untitled"}</strong>
+                  <span className="muted">{item.category}</span>
+                </div>
+                <div className="saved-meta">
+                  <span>{item.frequency}</span>
+                  <strong>{formatMoney(item.amount)}</strong>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
