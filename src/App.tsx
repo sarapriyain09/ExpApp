@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Asset, BudgetData, BudgetItem, ExpenseTransaction, Liability, Loan, Snapshot } from "./types";
 import { DEFAULT_CURRENCY, calculateEmi, formatMoney, sum, toMonthly } from "./utils";
 import { loadState, saveState } from "./storage";
-import { supabase } from "./supabaseClient";
+import { apiGetState, apiLogin, apiRegister, apiSaveState, clearSession, getStoredEmail, isLoggedIn } from "./api";
 
 const uid = () => crypto.randomUUID();
 
@@ -118,10 +118,11 @@ const usePersistedState = () => {
 export default function App() {
   const { state, update, setState } = usePersistedState();
   const [tab, setTab] = useState<TabKey>("budget");
-  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [sessionEmail, setSessionEmail] = useState<string | null>(
+    isLoggedIn() ? getStoredEmail() : null
+  );
   const [showAuth, setShowAuth] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const loans = state.loans;
   const assets = state.assets;
@@ -169,180 +170,37 @@ export default function App() {
       ? state.snapshots.map((item) => (item.month === month ? snapshot : item))
       : [snapshot, ...state.snapshots];
     update({ ...state, snapshots: updated });
-    void saveSnapshotToSupabase(snapshot);
   };
 
-  const saveSnapshotToSupabase = async (snapshot: Snapshot) => {
-    if (!userId) return;
-    const { error } = await supabase
-      .from("monthly_snapshots")
-      .upsert(
-        {
-          user_id: userId,
-          month: snapshot.month,
-          assets_total: snapshot.assetsTotal,
-          liabilities_total: snapshot.liabilitiesTotal,
-          net_worth: snapshot.netWorth,
-          budget_income: budgetMonthlyIncome,
-          budget_expense: budgetMonthlyExpense,
-          loans_emi: loansMonthlyEmi
-        },
-        { onConflict: "user_id,month" }
-      );
-    if (error) {
-      setAuthError(error.message);
-    }
-  };
-
-  const saveTransactionsToSupabase = async (items: ExpenseTransaction[]) => {
-    if (!userId) return;
-    if (items.length === 0) {
-      const { error } = await supabase.from("expense_transactions").delete().eq("user_id", userId);
-      if (error) setAuthError(error.message);
-      return;
-    }
-    const payload = items.map((tx) => ({
-      id: tx.id,
-      user_id: userId,
-      date: tx.date,
-      category: tx.category,
-      description: tx.description,
-      amount: tx.amount
-    }));
-    const { error: upsertError } = await supabase
-      .from("expense_transactions")
-      .upsert(payload, { onConflict: "id" });
-    if (upsertError) {
-      setAuthError(upsertError.message);
-      return;
-    }
-    const ids = items.map((tx) => `"${tx.id}"`).join(",");
-    const { error: deleteError } = await supabase
-      .from("expense_transactions")
-      .delete()
-      .eq("user_id", userId)
-      .not("id", "in", `(${ids})`);
-    if (deleteError) setAuthError(deleteError.message);
-  };
-
-  const saveStateToSupabase = async (nextState: typeof state) => {
-    if (!userId) return;
-    const { error } = await supabase
-      .from("user_state")
-      .upsert(
-        {
-          user_id: userId,
-          state: nextState,
-          updated_at: new Date().toISOString()
-        },
-        { onConflict: "user_id" }
-      );
-    if (error) {
-      setAuthError(error.message);
-    }
-  };
-
-  const loadStateFromSupabase = async (activeUserId: string) => {
-    const { data, error } = await supabase
-      .from("user_state")
-      .select("state")
-      .eq("user_id", activeUserId)
-      .maybeSingle();
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-    if (data?.state) {
-      setState(data.state);
-    }
-  };
-
-  const loadSnapshotsFromSupabase = async (activeUserId: string) => {
-    const { data, error } = await supabase
-      .from("monthly_snapshots")
-      .select("month, assets_total, liabilities_total, net_worth")
-      .eq("user_id", activeUserId)
-      .order("month", { ascending: false });
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-    const mapped = (data ?? []).map((row) => ({
-      id: uid(),
-      month: row.month as string,
-      assetsTotal: Number(row.assets_total ?? 0),
-      liabilitiesTotal: Number(row.liabilities_total ?? 0),
-      netWorth: Number(row.net_worth ?? 0),
-      createdAt: new Date().toISOString()
-    }));
-    setState((prev) => ({ ...prev, snapshots: mapped }));
-  };
-
-  const loadTransactionsFromSupabase = async (activeUserId: string) => {
-    const { data, error } = await supabase
-      .from("expense_transactions")
-      .select("id, date, category, description, amount")
-      .eq("user_id", activeUserId)
-      .order("date", { ascending: false });
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-    const mapped = (data ?? []).map((row) => ({
-      id: row.id as string,
-      date: row.date as string,
-      category: row.category as string,
-      description: row.description as string,
-      amount: Number(row.amount ?? 0)
-    }));
-    setState((prev) => ({ ...prev, expenseTransactions: mapped }));
-  };
-
+  // Load state from Pi when user logs in
   useEffect(() => {
-    let active = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSessionEmail(data.session?.user.email ?? null);
-      const nextUserId = data.session?.user.id ?? null;
-      setUserId(nextUserId);
-      if (nextUserId) {
-        void loadStateFromSupabase(nextUserId);
-        void loadSnapshotsFromSupabase(nextUserId);
-        void loadTransactionsFromSupabase(nextUserId);
-      }
-    });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSessionEmail(session?.user.email ?? null);
-      const nextUserId = session?.user.id ?? null;
-      setUserId(nextUserId);
-      setAuthError(null);
-      if (nextUserId) {
-        void loadStateFromSupabase(nextUserId);
-        void loadSnapshotsFromSupabase(nextUserId);
-        void loadTransactionsFromSupabase(nextUserId);
-      }
-    });
-    return () => {
-      active = false;
-      listener.subscription.unsubscribe();
-    };
-  }, []);
+    if (!sessionEmail) return;
+    apiGetState()
+      .then((remote) => {
+        if (remote) setState(remote as ReturnType<typeof loadState>);
+      })
+      .catch(() => setSyncError("Could not load data from server."));
+  }, [sessionEmail]);
 
+  // Sync state to Pi (debounced) whenever state changes
   useEffect(() => {
-    if (!userId) return;
+    if (!sessionEmail) return;
     const handle = setTimeout(() => {
-      void saveStateToSupabase(state);
-    }, 800);
+      apiSaveState(state).catch(() => setSyncError("Could not save data to server."));
+    }, 1000);
     return () => clearTimeout(handle);
-  }, [state, userId]);
+  }, [state, sessionEmail]);
 
-  useEffect(() => {
-    if (!userId) return;
-    const handle = setTimeout(() => {
-      void saveTransactionsToSupabase(state.expenseTransactions);
-    }, 800);
-    return () => clearTimeout(handle);
-  }, [state.expenseTransactions, userId]);
+  const handleSignOut = () => {
+    clearSession();
+    setSessionEmail(null);
+  };
+
+  const handleAuthSuccess = (email: string) => {
+    setSessionEmail(email);
+    setShowAuth(false);
+    setSyncError(null);
+  };
 
   return (
     <div className="app">
@@ -355,14 +213,10 @@ export default function App() {
           {sessionEmail ? (
             <div className="auth-row">
               <span>{sessionEmail}</span>
-              <button className="ghost" onClick={() => supabase.auth.signOut()}>
-                Sign out
-              </button>
+              <button className="ghost" onClick={handleSignOut}>Sign out</button>
             </div>
           ) : (
-            <button onClick={() => setShowAuth((prev) => !prev)}>
-              Sign in / Register
-            </button>
+            <button onClick={() => setShowAuth((prev) => !prev)}>Sign in / Register</button>
           )}
         </div>
         <div className="summary">
@@ -392,11 +246,13 @@ export default function App() {
       </nav>
 
       <main>
+        {syncError && (
+          <div className="error" style={{ margin: "0.5rem 1rem", padding: "0.5rem" }}>{syncError}</div>
+        )}
         {showAuth && (
           <AuthPanel
-            error={authError}
             onClose={() => setShowAuth(false)}
-            onError={(message) => setAuthError(message)}
+            onSuccess={handleAuthSuccess}
           />
         )}
         {tab === "budget" && (
@@ -1172,41 +1028,44 @@ const NetWorthView = ({
   );
 };
 
+
+
 const AuthPanel = ({
-  error,
   onClose,
-  onError
+  onSuccess
 }: {
-  error: string | null;
   onClose: () => void;
-  onError: (message: string | null) => void;
+  onSuccess: (email: string) => void;
 }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSignIn = async () => {
     setLoading(true);
-    onError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) {
-      onError(error.message);
-      return;
+    setError(null);
+    try {
+      const resolvedEmail = await apiLogin(email, password);
+      onSuccess(resolvedEmail);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
     }
-    onClose();
   };
 
-  const handleSignUp = async () => {
+  const handleRegister = async () => {
     setLoading(true);
-    onError(null);
-    const { error } = await supabase.auth.signUp({ email, password });
-    setLoading(false);
-    if (error) {
-      onError(error.message);
-      return;
+    setError(null);
+    try {
+      const resolvedEmail = await apiRegister(email, password);
+      onSuccess(resolvedEmail);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
     }
-    onClose();
   };
 
   return (
@@ -1214,25 +1073,25 @@ const AuthPanel = ({
       <div className="auth-header">
         <div>
           <h3>Sign in or Register</h3>
-          <p className="muted">Your data will sync to your account.</p>
+          <p className="muted">Your data syncs to the Raspberry Pi.</p>
         </div>
         <button className="ghost" onClick={onClose}>Close</button>
       </div>
       <div className="auth-form">
         <label>
           Email
-          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label>
           Password
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {error && <p className="error">{error}</p>}
         <div className="auth-actions">
           <button onClick={handleSignIn} disabled={loading || !email || !password}>
             Sign in
           </button>
-          <button className="ghost" onClick={handleSignUp} disabled={loading || !email || !password}>
+          <button className="ghost" onClick={handleRegister} disabled={loading || !email || !password}>
             Register
           </button>
         </div>
