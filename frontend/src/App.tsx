@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import type { Asset, BudgetData, BudgetItem, ExpenseTransaction, Liability, Loan, Snapshot } from "./types";
 import { DEFAULT_CURRENCY, calculateEmi, formatMoney, sum, toMonthly } from "./utils";
 import { loadState, saveState } from "./storage";
-import { apiGetState, apiLogin, apiRegister, apiSaveState, clearSession, getStoredEmail, isLoggedIn } from "./api";
+import {
+  apiForgotPassword,
+  apiGetState,
+  apiLogin,
+  apiRegister,
+  apiSaveState,
+  clearSession,
+  getStoredEmail,
+  isLoggedIn
+} from "./api";
 
 const uid = () => crypto.randomUUID();
 
@@ -1039,12 +1048,16 @@ const AuthPanel = ({
 }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isResetMode, setIsResetMode] = useState(false);
 
   const handleSignIn = async () => {
     setLoading(true);
     setError(null);
+    setMessage(null);
     try {
       const resolvedEmail = await apiLogin(email, password);
       onSuccess(resolvedEmail);
@@ -1058,9 +1071,31 @@ const AuthPanel = ({
   const handleRegister = async () => {
     setLoading(true);
     setError(null);
+    setMessage(null);
     try {
       const resolvedEmail = await apiRegister(email, password);
       onSuccess(resolvedEmail);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiForgotPassword(email, password);
+      setMessage("Password updated. You can now sign in.");
+      setIsResetMode(false);
+      setPassword("");
+      setConfirmPassword("");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1072,7 +1107,7 @@ const AuthPanel = ({
     <section className="auth-panel">
       <div className="auth-header">
         <div>
-          <h3>Sign in or Register</h3>
+          <h3>{isResetMode ? "Reset password" : "Sign in or Register"}</h3>
           <p className="muted">Your data syncs to the Raspberry Pi.</p>
         </div>
         <button className="ghost" onClick={onClose}>Close</button>
@@ -1083,17 +1118,44 @@ const AuthPanel = ({
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label>
-          Password
+          {isResetMode ? "New password" : "Password"}
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
+        {isResetMode && (
+          <label>
+            Confirm new password
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </label>
+        )}
         {error && <p className="error">{error}</p>}
+        {message && <p className="muted">{message}</p>}
         <div className="auth-actions">
-          <button onClick={handleSignIn} disabled={loading || !email || !password}>
-            Sign in
-          </button>
-          <button className="ghost" onClick={handleRegister} disabled={loading || !email || !password}>
-            Register
-          </button>
+          {isResetMode ? (
+            <>
+              <button onClick={handleForgotPassword} disabled={loading || !email || !password || !confirmPassword}>
+                Reset password
+              </button>
+              <button className="ghost" onClick={() => { setIsResetMode(false); setError(null); setMessage(null); }}>
+                Back
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={handleSignIn} disabled={loading || !email || !password}>
+                Sign in
+              </button>
+              <button className="ghost" onClick={handleRegister} disabled={loading || !email || !password}>
+                Register
+              </button>
+              <button className="ghost" onClick={() => { setIsResetMode(true); setError(null); setMessage(null); }}>
+                Forgot password
+              </button>
+            </>
+          )}
         </div>
       </div>
     </section>

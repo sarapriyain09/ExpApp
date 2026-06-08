@@ -1,4 +1,10 @@
-const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3001";
+const envBaseUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+const inferredBaseUrl =
+  typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:3001`
+    : "http://localhost:3001";
+
+const BASE_URL = envBaseUrl || inferredBaseUrl;
 
 const TOKEN_KEY = "expapp.token";
 const EMAIL_KEY = "expapp.email";
@@ -48,6 +54,16 @@ export const apiRegister = async (email: string, password: string): Promise<stri
   if (!res.ok) throw new Error(data.error ?? "Registration failed");
   storeSession(data.token!, data.email!);
   return data.email!;
+};
+
+export const apiForgotPassword = async (email: string, newPassword: string): Promise<void> => {
+  const res = await fetch(`${BASE_URL}/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, newPassword })
+  });
+  const data = (await res.json()) as { error?: string };
+  if (!res.ok) throw new Error(data.error ?? "Password reset failed");
 };
 
 export const apiGetState = async (): Promise<unknown> => {
